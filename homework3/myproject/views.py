@@ -10,7 +10,7 @@ import os
 from django.conf import settings
   
 # Шаг 4.1: Ограничение на 3 класса по твоему варианту (17, 47, 77)
-imageClassList = {17: 'castle', 47: 'maple_tree', 77: 'snail'} #
+imageClassList = {12: 'bridge', 42: 'leopard', 75: 'skunk'}#
   
 def scoreImagePage(request):  
     return render(request, 'scorepage.html')  
@@ -48,7 +48,7 @@ def predictImageData(modelName, filePath):
     raw_outputs = sess.run(None, {'input': to_numpy(input_batch)})[0][0]  
     
     # Ограничиваем выбор строго тремя классами по варианту
-    target_classes = [17, 47, 77]
+    target_classes = [12, 42, 75]
     target_logits = [raw_outputs[i] for i in target_classes]
     
     # Находим победителя (индекс 0, 1 или 2) и сопоставляем с реальным классом
