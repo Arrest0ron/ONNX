@@ -1,0 +1,6 @@
+django
+onnx
+onnxruntime
+numpy
+pillow
+torchvision
