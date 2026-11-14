@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Doodle Jump AI</title>
+    <meta charset="UTF-8">
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #eee;
+        }
+
+        canvas {
+            border: 1px solid black;
+            background: white;
+        }
+    </style>
+</head>
+<body>
+
+<canvas width="375" height="667" id="game"></canvas>
+
+<!-- Укажите здесь ваш лучший файл весов из новой популяции -->
+<script src="doodlejump_final_avg_342.5.js"></script>
+
+<script>
+const canvas = document.getElementById('game');
+const context = canvas.getContext('2d');
+
+const platformWidth = 65;
+const platformHeight = 20;
+const platformStart = canvas.height - 50;
+
+const gravity = 0.33;
+const drag = 0.3;
+const bounceVelocity = -12.5;
+
+let minPlatformSpace = 15;
+let maxPlatformSpace = 20;
+
+let platforms = [{
+    x: canvas.width / 2 - platformWidth / 2,
+    y: platformStart
+}];
+
+function random(min, max) {
+    return Math.random() * (max - min) + min;
+}
+
+// Генерация начальных платформ
+let y = platformStart;
+
+while (y > 0) {
+    y -= platformHeight + random(minPlatformSpace, maxPlatformSpace);
+
+    let x;
+    do {
+        x = random(25, canvas.width - 25 - platformWidth);
+    } while (
+        y > canvas.height / 2 &&
+        x > canvas.width / 2 - platformWidth * 1.5 &&
+        x < canvas.width / 2 + platformWidth / 2
+    );
+
+    platforms.push({ x, y });
+}
+
+const doodle = {
+    width: 40,
+    height: 60,
+    x: canvas.width / 2 - 20,
+    y: platformStart - 60,
+    dx: 0,
+    dy: 0,
+    playerDir: 0,
+    prevDoodleY: platformStart - 60
+};
+
+let keydown = false;
+
+// =====================================================
+// FEATURES: УМНЫЙ РАДАР "СВЕРХУ / СНИЗУ" (20 фичей)
+// =====================================================
+
+function getFeatures() {
+    const screenWidth = canvas.width;
+    const screenHeight = canvas.height;
+
+    const d_center_x = doodle.x + doodle.width / 2;
+    const d_feet_y = doodle.y + doodle.height;
+
+    // 4 базовые фичи состояния игрока
+    const feats = [
+        d_center_x / screenWidth,
+        d_feet_y / screenHeight,
+        doodle.dx / 5.0,
+        doodle.dy / 15.0
+    ];
+
+    const below = [];
+    const above = [];
+
+    for (const p of platforms) {
+        const px = p.x + platformWidth / 2;
+        const py = p.y;
+
+        // Относительный X (с учетом перехода экрана)
+        let dx = px - d_center_x;
+        if (dx > screenWidth / 2) dx -= screenWidth;
+        else if (dx < -screenWidth / 2) dx += screenWidth;
+
+        // Относительный Y
+        const dy = py - d_feet_y;
+        
+        // Эвристика достижимости (как в Python)
+        const reachability_cost = Math.abs(dy) + Math.abs(dx) * 1.5;
+
+        if (dy >= 0) {
+            below.push({ normDx: dx / screenWidth, normDy: dy / screenHeight, cost: reachability_cost });
+        } else {
+            above.push({ normDx: dx / screenWidth, normDy: dy / screenHeight, cost: reachability_cost });
+        }
+    }
+
+    // Сортируем списки по "стоимости пути" (самые доступные первые)
+    below.sort((a, b) => a.cost - b.cost);
+    above.sort((a, b) => a.cost - b.cost);
+
+    // 4 платформы снизу (куда падаем)
+    for (let i = 0; i < 4; i++) {
+        if (i < below.length) {
+            feats.push(below[i].normDx, below[i].normDy);
+        } else {
+            feats.push(0.0, 1.0); // Заглушка
+        }
+    }
+
+    // 4 платформы сверху (куда планировать прыжок)
+    for (let i = 0; i < 4; i++) {
+        if (i < above.length) {
+            feats.push(above[i].normDx, above[i].normDy);
+        } else {
+            feats.push(0.0, -1.0); // Заглушка
+        }
+    }
+
+    return feats;
+}
+
+// =====================================================
+// NEURAL NETWORK: 20 -> 24 -> 12 -> 1 (с Leaky ReLU)
+// =====================================================
+
+function getAction(features) {
+    if (features.length !== 20) {
+        throw new Error(`Ожидалось 20 признаков, получено ${features.length}`);
+    }
+
+    // Входной слой -> первый скрытый слой
+    let h1 = new Array(W1[0].length).fill(0);
+
+    for (let i = 0; i < features.length; i++) {
+        for (let j = 0; j < W1[0].length; j++) {
+            h1[j] += features[i] * W1[i][j];
+        }
+    }
+
+    // Leaky ReLU
+    for (let j = 0; j < h1.length; j++) {
+        h1[j] = h1[j] > 0 ? h1[j] : 0.05 * h1[j];
+    }
+
+    // Первый -> второй скрытый слой
+    let h2 = new Array(W2[0].length).fill(0);
+
+    for (let i = 0; i < h1.length; i++) {
+        for (let j = 0; j < W2[0].length; j++) {
+            h2[j] += h1[i] * W2[i][j];
+        }
+    }
+
+    // Leaky ReLU
+    for (let j = 0; j < h2.length; j++) {
+        h2[j] = h2[j] > 0 ? h2[j] : 0.05 * h2[j];
+    }
+
+    // Второй скрытый слой -> выход
+    let output = 0;
+
+    for (let i = 0; i < h2.length; i++) {
+        output += h2[i] * W3[i][0];
+    }
+
+    return Math.tanh(output);
+}
+
+// =====================================================
+// ACTION: РЕЗКОЕ УПРАВЛЕНИЕ
+// =====================================================
+
+function applyAction(action) {
+    action = Math.max(-1.0, Math.min(1.0, action));
+
+    if (Math.abs(action) < 0.1) {
+        keydown = false;
+        return;
+    }
+
+    keydown = true;
+    doodle.playerDir = action < 0 ? -1 : 1;
+    doodle.dx = action * 5.0; 
+}
+
+// =====================================================
+// GAME LOOP
+// =====================================================
+
+let score = 0;
+let gameOver = false;
+
+function loop() {
+    if (gameOver) {
+        return;
+    }
+
+    requestAnimationFrame(loop);
+
+    // 1. Получаем признаки
+    const features = getFeatures();
+
+    // 2. Получаем прямое действие нейросети
+    const action = getAction(features);
+
+    // 3. Применяем действие
+    applyAction(action);
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 4. Физика
+    doodle.dy += gravity;
+
+    if (doodle.y < canvas.height / 2 && doodle.dy < 0) {
+        platforms.forEach(platform => {
+            platform.y -= doodle.dy;
+        });
+
+        while (platforms[platforms.length - 1].y > 0) {
+            platforms.push({
+                x: random(25, canvas.width - 25 - platformWidth),
+                y: platforms[platforms.length - 1].y -
+                   (platformHeight + random(minPlatformSpace, maxPlatformSpace))
+            });
+
+            minPlatformSpace = Math.min(
+                minPlatformSpace + 0.5,
+                canvas.height / 2 - 0.5
+            );
+
+            maxPlatformSpace = Math.min(
+                maxPlatformSpace + 0.5,
+                canvas.height / 2
+            );
+        }
+    } else {
+        doodle.y += doodle.dy;
+    }
+
+    // 5. Горизонтальное движение и трение
+    if (!keydown) {
+        if (doodle.playerDir < 0) {
+            doodle.dx += drag;
+            if (doodle.dx > 0) {
+                doodle.dx = 0;
+                doodle.playerDir = 0;
+            }
+        } else if (doodle.playerDir > 0) {
+            doodle.dx -= drag;
+            if (doodle.dx < 0) {
+                doodle.dx = 0;
+                doodle.playerDir = 0;
+            }
+        }
+    }
+
+    doodle.x += doodle.dx;
+
+    // 6. Переход через границы экрана
+    if (doodle.x + doodle.width < 0) {
+        doodle.x = canvas.width;
+    } else if (doodle.x > canvas.width) {
+        doodle.x = -doodle.width;
+    }
+
+    // 7. Проверка столкновений
+    for (const platform of platforms) {
+        if (
+            doodle.dy > 0 &&
+            doodle.prevDoodleY + doodle.height <= platform.y &&
+            doodle.x < platform.x + platformWidth &&
+            doodle.x + doodle.width > platform.x &&
+            doodle.y < platform.y + platformHeight &&
+            doodle.y + doodle.height > platform.y
+        ) {
+            doodle.y = platform.y - doodle.height;
+            doodle.dy = bounceVelocity;
+        }
+    }
+
+    // 8. Отрисовка платформ
+    context.fillStyle = 'green';
+    platforms.forEach(platform => {
+        context.fillRect(
+            platform.x,
+            platform.y,
+            platformWidth,
+            platformHeight
+        );
+    });
+
+    // 9. Персонаж
+    context.fillStyle = 'yellow';
+    context.fillRect(
+        doodle.x,
+        doodle.y,
+        doodle.width,
+        doodle.height
+    );
+
+    doodle.prevDoodleY = doodle.y;
+
+    // 10. Удаление платформ и счёт (строго как в Python)
+    const initialPlatformsCount = platforms.length;
+    platforms = platforms.filter(
+        platform => platform.y < canvas.height
+    );
+    score += initialPlatformsCount - platforms.length;
+
+    // 11. Интерфейс
+    context.fillStyle = 'black';
+    context.font = '24px Arial';
+    context.fillText('Score: ' + score, 10, 30);
+
+    // Дополнительная информация для отладки
+    context.font = '12px Arial';
+    context.fillText(
+        'Action: ' + action.toFixed(3),
+        10,
+        50
+    );
+
+    // 12. Проверка проигрыша
+    if (doodle.y > canvas.height + doodle.height) {
+        gameOver = true;
+
+        context.fillStyle = 'red';
+        context.font = '36px Arial';
+        context.fillText('GAME OVER', 85, canvas.height / 2);
+
+        context.font = '20px Arial';
+        context.fillText('Score: ' + score, 130, canvas.height / 2 + 35);
+    }
+}
+
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
